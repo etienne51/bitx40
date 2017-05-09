@@ -17,13 +17,11 @@
  * etc is all in the loop() function. If you wish to study the code top down, then scroll
  * to the bottom of this file and read your way up.
  * 
- * Below are the libraries to be included for building the Raduino 
- * 
- * The EEPROM library is used to store settings like the frequency memory, caliberation data, 
- * callsign etc .
+ * Below are the libraries to be included for building the Raduino
  */
-
-#include <EEPROM.h>
+ 
+#include <Wire.h>
+#include <LiquidCrystal.h>
 
 /** 
  *  The main chip which generates upto three oscillators of various frequencies in the
@@ -34,168 +32,52 @@
  *  The Wire.h library is used to talk to the Si5351 and we also declare an instance of 
  *  Si5351 object to control the clocks.
  */
-#include <Wire.h>
-#include <si5351.h>
-Si5351 si5351;
-/** 
- * The Raduino board is the size of a standard 16x2 LCD panel. It has three connectors:
- * 
- * First, is an 8 pin connector that provides +5v, GND and six analog input pins that can also be 
- * configured to be used as digital input or output pins. These are referred to as A0,A1,A2,
- * A3,A6 and A7 pins. The A4 and A5 pins are missing from this connector as they are used to 
- * talk to the Si5351 over I2C protocol. 
- * 
- *  A0     A1   A2   A3    +5v    GND   A6   A7
- * BLACK BROWN RED ORANGE YELLOW GREEN BLUE VIOLET
- * 
- * Second is a 16 pin LCD connector. This connector is meant specifically for the standard 16x2
- * LCD display in 4 bit mode. The 4 bit mode requires 4 data lines and two control lines to work:
- * Lines used are : RESET, ENABLE, D4, D5, D6, D7 
- * We include the library and declare the configuration of the LCD panel too
- */
-
-#include <LiquidCrystal.h>
-LiquidCrystal lcd(8,9,10,11,12,13);
-
-/**
- * The Arduino, unlike C/C++ on a regular computer with gigabytes of RAM, has very little memory.
- * We have to be very careful with variables that are declared inside the functions as they are 
- * created in a memory region called the stack. The stack has just a few bytes of space on the Arduino
- * if you declare large strings inside functions, they can easily exceed the capacity of the stack
- * and mess up your programs. 
- * We circumvent this by declaring a few global buffers as  kitchen counters where we can 
- * slice and dice our strings. These strings are mostly used to control the display or handle
- * the input and output from the USB port. We must keep a count of the bytes used while reading
- * the serial port as we can easily run out of buffer space. This is done in the serial_in_count variable.
- */
-char serial_in[32], c[30], b[30], printBuff[32];
-int count = 0;
-unsigned char serial_in_count = 0;
-
-/**
- * We need to carefully pick assignment of pin for various purposes.
- * There are two sets of completely programmable pins on the Raduino.
- * First, on the top of the board, in line with the LCD connector is an 8-pin connector
- * that is largely meant for analog inputs and front-panel control. It has a regulated 5v output,
- * ground and six pins. Each of these six pins can be individually programmed 
- * either as an analog input, a digital input or a digital output. 
- * The pins are assigned as follows: 
- *        A0,   A1,  A2,  A3,   +5v,   GND,  A6,  A7 
- *      BLACK BROWN RED ORANGE YELLW  GREEN  BLUEVIOLET
- *      (while holding the board up so that back of the board faces you)
- *      
- * Though, this can be assigned anyway, for this application of the Arduino, we will make the following
- * assignment
- * A2
- is connected to a push button that can momentarily ground this line. This will be used to switch between different modes, etc.
- * A6 is to implement a keyer, it is reserved and not yet implemented
- * A7 is connected to a center pin of good quality 100K or 10K linear potentiometer with the two other ends connected to
- * ground and +5v lines available on the connector. This implments the tuning mechanism
- */
-
-#define ANALOG_KEYER (A1)
-#define CAL_BUTTON (A2)
-#define FBUTTON (A3)
-#define PTT   (A6)
-#define ANALOG_TUNING (A7)
-
-/** 
- *  The second set of 16 pins on the bottom connector are have the three clock outputs and the digital lines to control the rig.
- *  This assignment is as follows :
- *    Pin   1   2    3    4    5    6    7    8    9    10   11   12   13   14   15   16
- *         +5V +5V CLK0  GND  GND  CLK1 GND  GND  CLK2  GND  D2   D3   D4   D5   D6   D7  
- *  These too are flexible with what you may do with them, for the Raduino, we use them to :
- *  - TX_RX line : Switches between Transmit and Receive after sensing the PTT or the morse keyer
- *  - CW_KEY line : turns on the carrier for CW
- *  These are not used at the moment.
- */
-
-#define TX_RX (7)
-#define CW_TONE (6)
-#define CW_KEY (5)
-#define TX_LPF_SEL (4)
-
-/**
- *  The raduino has a number of timing parameters, all specified in milliseconds 
- *  CW_TIMEOUT : how many milliseconds between consecutive keyup and keydowns before switching back to receive?
- *  The next set of three parameters determine what is a tap, a double tap and a hold time for the funciton button
- *  TAP_DOWN_MILLIS : upper limit of how long a tap can be to be considered as a button_tap
- *  TAP_UP_MILLIS : upper limit of how long a gap can be between two taps of a button_double_tap
- *  TAP_HOLD_MILIS : many milliseconds of the buttonb being down before considering it to be a button_hold
- */
  
-#define TAP_UP_MILLIS (500)
-#define TAP_DOWN_MILLIS (600)
-#define TAP_HOLD_MILLIS (2000)
-#define CW_TIMEOUT (600l) // in milliseconds, this is the parameter that determines how long the tx will hold between cw key downs
+#include <si5351.h> // Use v2.0.1 to avoid clicking noise when tuning
 
-/**
- * The Raduino supports two VFOs : A and B and receiver incremental tuning (RIT). 
- * we define a variables to hold the frequency of the two VFOs, RITs
- * the rit offset as well as status of the RIT
- * 
- * To use this facility, wire up push button on A3 line of the control connector
- */
-#define VFO_A 0
-#define VFO_B 1
-char ritOn = 0;
-char vfoActive = VFO_A;
-unsigned long vfoA=7100000L, vfoB=14200000L, ritA, ritB, sideTone=800;
+#define BFO_CENTER   8828450 // Filter currently used comes from Kenwood R-5000, use 11996250 for internal filter
+#define FILTER_WIDTH    2600 // Use 2500 for internal filter
+#define BFO_SHIFT (FILTER_WIDTH / 2)
 
-/**
- * Raduino needs to keep track of current state of the transceiver. These are a few variables that do it
- */
+#define CALIBRATION    -1116
 
-char inTx = 0;
-char keyDown = 0;
-char isUSB = 0;
-unsigned long cwTimeout = 0;
-unsigned char txFilter = 0;
+#define LOWEST_FREQ  7000000
+#define HIGHEST_FREQ 7200000
 
-/** Tuning Mechanism of the Raduino
- *  We use a linear pot that has two ends connected to +5 and the ground. the middle wiper
- *  is connected to ANALOG_TUNNING pin. Depending upon the position of the wiper, the
- *  reading can be anywhere from 0 to 1024.
- *  The tuning control works in steps of 50Hz each for every increment between 50 and 950.
- *  Hence the turning the pot fully from one end to the other will cover 50 x 900 = 45 KHz.
- *  At the two ends, that is, the tuning starts slowly stepping up or down in 10 KHz steps 
- *  To stop the scanning the pot is moved back from the edge. 
- *  To rapidly change from one band to another, you press the function button and then
- *  move the tuning pot. Now, instead of 50 Hz, the tuning is in steps of 50 KHz allowing you
- *  rapidly use it like a 'bandset' control.
- *  To implement this, we fix a 'base frequency' to which we add the offset that the pot 
- *  points to. We also store the previous position to know if we need to wake up and change
- *  the frequency.
- */
+#define START_FREQ   7060000
 
-#define INIT_BFO_FREQ (1199800L)
-unsigned long baseTune =  7100000L;
-unsigned long bfo_freq = 11998000L;
+#define ENCODER_PIN1 2
+#define ENCODER_PIN2 3
 
-int  old_knob = 0;
+#define SWITCH4_PIN  5
+#define SWITCH3_PIN  4
+/* Switches 1 and 2 not yet wired up */
 
-#define CW_OFFSET (800l)
-#define LOWEST_FREQ  (6995000l)
-#define HIGHEST_FREQ (7500000l)
+#define ENCODER_SENSIVITY 10 // Higher value for lower sensivity
 
-long frequency, stepSize=100000;
+LiquidCrystal lcd(8, 9, 10, 11, 12, 13);
+Si5351 si5351;
 
-/**
- * The raduino can be booted into multiple modes:
- * MODE_NORMAL : works the radio  normally
- * MODE_CALIBRATION : used to calibrate Raduino.
- * To enter this mode, hold the function button down and power up. Tune to exactly 10 MHz on clock0 and release the function button
- */
- #define MODE_NORMAL (0)
- #define MODE_CALIBRATE (1)
- char mode = MODE_NORMAL;
+volatile int lastEncoded = 0;
+volatile long encoderValue = 0, lastEncoderValue = 0;
+long lastencoderValue = 0;
+int lastMSB = 0;
+int lastLSB = 0;
 
-/**
- * Display Routines
- * These two display routines print a line of characters to the upper and lower lines of the 16x2 display
- */
+volatile int lastPressed4 = HIGH, lastPressed3 = HIGH;
 
-void printLine1(char *c){
+bool updateNeeded = true;
+
+char c[30], b[30], printBuff[32];
+int count = 0;
+
+bool upperSideBand = false;
+
+long frequency;
+unsigned long bfoFreq = BFO_CENTER - BFO_SHIFT; // Lower Side Band
+long tuneStep = 100;
+
+void printLine1(char *c) {
   if (strcmp(c, printBuff)){
     lcd.setCursor(0, 0);
     lcd.print(c);
@@ -204,429 +86,172 @@ void printLine1(char *c){
   }
 }
 
-void printLine2(char *c){
+void printLine2(char *c) {
   lcd.setCursor(0, 1);
   lcd.print(c);
 }
 
-/**
- * Building upon the previous  two functions, 
- * update Display paints the first line as per current state of the radio
- * 
- * At present, we are not using the second line. YOu could add a CW decoder or SWR/Signal strength
- * indicator
- */
-
-void updateDisplay(){
-    sprintf(b, "%08ld", frequency);      
-    sprintf(c, "%s:%.2s.%.4s", vfoActive == VFO_A ? "A" : "B" , b,  b+2);
-    if (isUSB)
-      strcat(c, " USB");
-    else
-      strcat(c, " LSB");
-      
-    if (inTx)
-      strcat(c, " TX");
-    else if (ritOn)
-      strcat(c, " +R");
-    else
-      strcat(c, "   ");
-          
-    printLine1(c);
-}
-
-/**
- * To use calibration sets the accurate readout of the tuned frequency
- * To calibrate, follow these steps:
- * 1. Tune in a signal that is at a known frequency.
- * 2. Now, set the display to show the correct frequency, 
- *    the signal will no longer be tuned up properly
- * 3. Press the CAL_BUTTON line to the ground
- * 4. tune in the signal until it sounds proper.
- * 5. Release CAL_BUTTON
- * In step 4, when we say 'sounds proper' then, for a CW signal/carrier it means zero-beat 
- * and for SSB it is the most natural sounding setting.
- * 
- * Calibration is an offset that is added to the VFO frequency by the Si5351 library.
- * We store it in the EEPROM's first four bytes and read it in setup() when the Radiuno is powered up
- */
-void calibrate(){
-    int32_t cal;
-
-    // The tuning knob gives readings from 0 to 1000
-    // Each step is taken as 10 Hz and the mid setting of the knob is taken as zero
-    cal = (analogRead(ANALOG_TUNING) - 500) * 500ULL;
-
-    // if the button is released, we save the setting
-    // and delay anything else by 5 seconds to debounce the CAL_BUTTON
-    // Debounce : it is the rapid on/off signals that happen on a mechanical switch
-    // when you change it's state
-    if (digitalRead(CAL_BUTTON) == HIGH){
-      mode = MODE_NORMAL;
-      EEPROM.put(0,cal);
-      printLine2("Calibrated    ");
-      delay(5000);
-    }
-    else {
-      // while the calibration is in progress (CAL_BUTTON is held down), keep tweaking the
-      // frequency as read out by the knob, display the chnage in the second line
-      si5351.set_correction(cal);
-      si5351.set_pll(SI5351_PLL_FIXED, SI5351_PLLA);
-      si5351.set_pll(SI5351_PLL_FIXED, SI5351_PLLB);
-      
-      setFrequency(frequency);
-      updateDisplay();
-      sprintf(c, "%08ld  ", cal);
-      printLine2(c);
-    }  
-}
-
-
-/**
- * The setFrequency is a little tricky routine, it works differently for USB and LSB
- * 
- * The BITX BFO is permanently set to lower sideband, (that is, the crystal frequency 
- * is on the higher side slope of the crystal filter).
- * 
- * LSB: The VFO frequency is subtracted from the BFO. Suppose the BFO is set to exactly 12 MHz
- * and the VFO is at 5 MHz. The output will be at 12.000 - 5.000  = 7.000 MHz
- * 
- * USB: The BFO is subtracted from the VFO. Makes the LSB signal of the BITX come out as USB!!
- * Here is how it will work:
- * Consider that you want to transmit on 14.000 MHz and you have the BFO at 12.000 MHz. We set
- * the VFO to 26.000 MHz. Hence, 26.000 - 12.000 = 14.000 MHz. Now, consider you are whistling a tone
- * of 1 KHz. As the BITX BFO is set to produce LSB, the output from the crystal filter will be 11.999 MHz.
- * With the VFO still at 26.000, the 14 Mhz output will now be 26.000 - 11.999 = 14.001, hence, as the
- * frequencies of your voice go down at the IF, the RF frequencies will go up!
- * 
- * Thus, setting the VFO on either side of the BFO will flip between the USB and LSB signals.
- */
-
-void setFrequency(unsigned long f){
-  uint64_t osc_f;
+void updateDisplay() {
+  int mhz = frequency / 1000000;
+  int khz = (frequency / 1000) % 1000;
+  int hz = frequency  % 1000;
   
-  if (isUSB){
-    si5351.set_freq((bfo_freq + f) * 100ULL,  SI5351_CLK2);
-  }
-  else{
-    si5351.set_freq((bfo_freq - f) * 100ULL, SI5351_CLK2);
-  }
+  sprintf(c, "   %d.%03d.%03d Hz ", mhz, khz, hz);
+        
+  printLine1(c);
+
+  mhz = tuneStep / 1000000;
+  khz = (tuneStep / 1000) % 1000;
+  hz = tuneStep  % 1000;
+
+  if (hz)
+    sprintf(c, "%cSB     [%3d Hz]", (upperSideBand ? 'U' : 'L'), hz);
+  else if (khz)
+    sprintf(c, "%cSB [%3d kHz]     ", (upperSideBand ? 'U' : 'L'), khz);
+
+  printLine2(c);
+}
+
+void updateBFO() {
+  bfoFreq = upperSideBand
+    ? BFO_CENTER + BFO_SHIFT
+    : BFO_CENTER - BFO_SHIFT;
+  
+  si5351.set_freq(bfoFreq * 100ULL, SI5351_CLK0);
+}
+
+void setFrequency(unsigned long f) {
+  si5351.set_freq((bfoFreq + f + CALIBRATION) * 100ULL, SI5351_CLK2);
 
   frequency = f;
 }
 
-/**
- * The Checkt TX toggles the T/R line. The current BITX wiring up doesn't use this
- * but if you would like to make use of RIT, etc, You must wireup an NPN transistor to to the PTT line
- * as follows :
- * emitter to ground, 
- * base to TX_RX line through a 4.7K resistr(as defined at the top of this source file)
- * collecter to the PTT line
- * Now, connect the PTT to the control connector's PTT line (see the definitions on the top)
- * 
- * Yeah, surprise! we have CW supported on the Raduino
- */
-
-void checkTX(){
+void updateEncoder(){
+  long old_freq = frequency;
   
-  // We don't check for ptt when transmitting cw
-  // as long as the cwTimeout is non-zero, we will continue to hold the
-  // radio in transmit mode
-  if (cwTimeout > 0)
-    return;
+  int MSB = digitalRead(ENCODER_PIN1); // MSB = most significant bit
+  int LSB = digitalRead(ENCODER_PIN2); // LSB = least significant bit
+
+  int encoded = (MSB << 1) |LSB; // Converting the 2 pin value to single number
+  int sum  = (lastEncoded << 2) | encoded; // Adding it to the previous encoded value
+
+  if (sum == 0b1110 || sum == 0b0111 || sum == 0b0001 || sum == 0b1000)
+    encoderValue--;
     
-  if (digitalRead(PTT) == 0 && inTx == 0){
-    inTx = 1;
-    digitalWrite(TX_RX, 1);
-    updateDisplay();
-  }
-	
-  if (digitalRead(PTT) == 1 && inTx == 1){
-    inTx = 0;
-    digitalWrite(TX_RX, 0);
-    updateDisplay();
-  }
-}
+  if (sum == 0b1101 || sum == 0b0100 || sum == 0b0010 || sum == 0b1011)
+    encoderValue++;
 
-/* CW is generated by injecting the side-tone into the mic line.
- * Watch http://bitxhacks.blogspot.com for the CW hack
- * nonzero cwTimeout denotes that we are in cw transmit mode.
- * 
- * This function is called repeatedly from the main loop() hence, it branches
- * each time to do a different thing
- * 
- * There are three variables that track the CW mode
- * inTX     : true when the radio is in transmit mode 
- * keyDown  : true when the CW is keyed down, you maybe in transmit mode (inTX true) 
- *            and yet between dots and dashes and hence keyDown could be true or false
- * cwTimeout: Figures out how long to wait between dots and dashes before putting 
- *            the radio back in receive mode
- */
-
-void checkCW(){
-
-  if (keyDown == 0 && analogRead(ANALOG_KEYER) < 50){
-    //switch to transmit mode if we are not already in it
-    if (inTx == 0){
-      digitalWrite(TX_RX, 1);
-      //give the relays a few ms to settle the T/R relays
-      delay(50);
+  long diff = encoderValue - lastEncoderValue;
+  if (abs(diff) >= ENCODER_SENSIVITY) {
+    if (diff > 0) {
+      if (frequency + tuneStep < HIGHEST_FREQ) {
+        frequency -= frequency % tuneStep;
+        frequency += tuneStep;
+      }
+      else
+        frequency = HIGHEST_FREQ;
     }
-    inTx = 1;
-    keyDown = 1;
-    tone(CW_TONE, sideTone);
-    updateDisplay();
+    else {
+      if (frequency - tuneStep > LOWEST_FREQ) {
+        frequency -= frequency % tuneStep;
+        frequency -= tuneStep;
+      }
+      else
+        frequency = LOWEST_FREQ;
+    }
+    lastEncoderValue = encoderValue;
   }
 
-  //reset the timer as long as the key is down
-  if (keyDown == 1){
-     cwTimeout = CW_TIMEOUT + millis();
+  if (frequency != old_freq) {
+    updateNeeded = true;
   }
 
-  //if we have a keyup
-  if (keyDown == 1 && analogRead(ANALOG_KEYER) > 150){
-    keyDown = 0;
-    noTone(CW_TONE);
-    cwTimeout = millis() + CW_TIMEOUT;
-  }
-
-  //if we are in cw-mode and have a keyuup for a longish time
-  if (cwTimeout > 0 && inTx == 1 && cwTimeout < millis()){
-    //move the radio back to receive
-    digitalWrite(TX_RX, 0);
-    inTx = 0;
-    cwTimeout = 0;
-    updateDisplay();
-  }
+  lastEncoded = encoded; // Store this value for next time
 }
 
-/**
- * A trivial function to wrap around the function button
- */
-int btnDown(){
-  if (digitalRead(FBUTTON) == HIGH)
-    return 0;
-  else
-    return 1;
+void updateFrequency() {
+  updateNeeded = false;
+  setFrequency(frequency);
+  updateDisplay();
 }
 
-/**
- * A click on the function button toggles the RIT
- * A double click switches between A and B vfos
- * A long press copies both the VFOs to the same frequency
- */
-void checkButton(){
-  int i, t1, t2, knob, new_knob, duration;
+void switchSideBand() {
+  upperSideBand = !upperSideBand;
+  updateBFO();
+  updateFrequency();
+  updateDisplay();
+}
 
-  //rest of this function is interesting only if the button is pressed
-  if (!btnDown())
-    return;
-
-  // we are at this point because we detected that the button was indeed pressed!
-  // we wait for a while and confirm it again so we can be sure it is not some noise
-  delay(50);
-  if (!btnDown())
-    return;
-    
-  // note the time of the button going down and where the tuning knob was
-  t1 = millis();
-  knob = analogRead(ANALOG_TUNING);
-  duration = 0;
+void checkPress() {
+  int pressed4 = digitalRead(SWITCH4_PIN);
   
-  // if you move the tuning knob within 3 seconds (3000 milliseconds) of pushing the button down
-  // then consider it to be a coarse tuning where you you can move by 100 Khz in each step
-  // This is useful only for multiband operation.
-  while (btnDown() && duration < 3000){
-  
-      new_knob = analogRead(ANALOG_TUNING);
-      //has the tuninng knob moved while the button was down from its initial position?
-      if (abs(new_knob - knob) > 10){
-        int count = 0;
-        /* track the tuning and return */
-        while (btnDown()){
-          frequency = baseTune = ((analogRead(ANALOG_TUNING) * 30000l) + 1000000l);
-          setFrequency(frequency);
-          updateDisplay();
-          count++;
-          delay(200);
-        }
-        delay(1000);
-        return;
-      } /* end of handling the bandset */
-      
-     delay(100);
-     duration += 100;
-  }
-
-  //we reach here only upon the button being released
-
-  // if the button has been down for more thn TAP_HOLD_MILLIS, we consider it a long press
-  // set both VFOs to the same frequency, update the display and be done
-  if (duration > TAP_HOLD_MILLIS){
-    printLine2("VFOs reset!");
-    vfoA= vfoB = frequency;
-    delay(300);
-    updateDisplay();
-    return;    
-  }
-
-  // t1 holds the duration for the first press
-  t1 = duration;
-  //now wait for another click
-  delay(100);
-  // if there a second button press, toggle the VFOs
-  if (btnDown()){
-
-    //swap the VFOs on double tap
-    if (vfoActive == VFO_B){
-      vfoActive = VFO_A;
-      vfoB = frequency;
-      frequency = vfoA;
-    }
-    else{
-      vfoActive = VFO_B;
-      vfoA = frequency;
-      frequency = vfoB;
-    }
-     //printLine2("VFO swap! ");
-     delay(600);
-     updateDisplay();
-    
-  }
-  // No, there was not more taps
-  else {
-    //on a single tap, toggle the RIT
-    if (ritOn)
-      ritOn = 0;
-    else
-      ritOn = 1;
-    updateDisplay();
-  }    
-}
-
-/**
- * The Tuning mechansim of the Raduino works in a very innovative way. It uses a tuning potentiometer.
- * The tuning potentiometer that a voltage between 0 and 5 volts at ANALOG_TUNING pin of the control connector.
- * This is read as a value between 0 and 1000. Hence, the tuning pot gives you 1000 steps from one end to 
- * the other end of its rotation. Each step is 50 Hz, thus giving approximately 50 Khz of tuning range.
- * When the potentiometer is moved to either end of the range, the frequency starts automatically moving
- * up or down in 10 Khz increments
- */
-
-void doTuning(){
- unsigned long newFreq;
- 
- int knob = analogRead(ANALOG_TUNING)-10;
- unsigned long old_freq = frequency;
-
-  // the knob is fully on the low end, move down by 10 Khz and wait for 200 msec
- if (knob < 10 && frequency > LOWEST_FREQ) {
-      baseTune = baseTune - 10000l;
-      frequency = baseTune;
+  if (pressed4 != lastPressed4) {
+    if (pressed4 == HIGH) {
+      if (tuneStep < 1000)
+        tuneStep *= 10;
+      else
+        tuneStep = 1;
+        
       updateDisplay();
-      setFrequency(frequency);
-      delay(200);
-  } 
-  // the knob is full on the high end, move up by 10 Khz and wait for 200 msec
-  else if (knob > 1010 && frequency < HIGHEST_FREQ) {
-     baseTune = baseTune + 10000l; 
-     frequency = baseTune + 50000l;
-     setFrequency(frequency);
-     updateDisplay();
-     delay(200);
+    }
+    
+    lastPressed4 = pressed4;
   }
-  // the tuning knob is at neither extremities, tune the signals as usual
-  else if (knob != old_knob){
-     frequency = baseTune + (50l * knob);
-     old_knob = knob;
-     setFrequency(frequency);
-     updateDisplay();
+
+  int pressed3 = digitalRead(SWITCH3_PIN);
+  
+  if (pressed3 != lastPressed3) {
+    if (pressed3 == HIGH)
+      switchSideBand();
+    
+    lastPressed3 = pressed3;
   }
 }
 
-/**
- * setup is called on boot up
- * It setups up the modes for various pins as inputs or outputs
- * initiliaizes the Si5351 and sets various variables to initial state
- * 
- * Just in case the LCD display doesn't work well, the debug log is dumped on the serial monitor
- * Choose Serial Monitor from Arduino IDE's Tools menu to see the Serial.print messages
- */
-void setup()
-{
-  int32_t cal;
+void setup() {
+  pinMode(ENCODER_PIN1, INPUT_PULLUP); 
+  pinMode(ENCODER_PIN2, INPUT_PULLUP);
+  pinMode(SWITCH4_PIN, INPUT_PULLUP);
+  pinMode(SWITCH3_PIN, INPUT_PULLUP);
   
   lcd.begin(16, 2);
   printBuff[0] = 0;
-  printLine1("Raduino v1.01"); 
-  printLine2("             "); 
 
-  // Start serial and initialize the Si5351
   Serial.begin(9600);
   analogReference(DEFAULT);
-  Serial.println("*Raduino booting up\nv0.01\n");
-
-  //configure the function button to use the external pull-up
-  pinMode(FBUTTON, INPUT);
-  digitalWrite(FBUTTON, HIGH);
-
-  pinMode(PTT, INPUT);
-  digitalWrite(PTT, HIGH);
-
-  pinMode(CAL_BUTTON, INPUT);
-  digitalWrite(CAL_BUTTON, HIGH);
-
-  pinMode(CW_KEY, OUTPUT);  
-  pinMode(CW_TONE, OUTPUT);  
-  digitalWrite(CW_KEY, 0);
-  digitalWrite(CW_TONE, 0);
-  digitalWrite(TX_RX, 0);
-  delay(500);
   
-  EEPROM.get(0,cal);
-  si5351.init(SI5351_CRYSTAL_LOAD_8PF,25000000l, cal);
-  sprintf(b, "cal: %ld\n", cal);
-  Serial.println(b);
-  si5351.set_correction(cal);  
-
-
-  Serial.println("*Initiliazed Si5351\n");
+  Serial.println("*Raduino booting up\n(v0.01)\n");
+  delay(100);
+  
+  si5351.init(SI5351_CRYSTAL_LOAD_8PF, 25000000l, 0);
+  Serial.println("*Initiliazed Si5351");
   
   si5351.set_pll(SI5351_PLL_FIXED, SI5351_PLLA);
   si5351.set_pll(SI5351_PLL_FIXED, SI5351_PLLB);
-  Serial.println("*Fixed PLL\n");  
-  //si5351.drive_strength(SI5351_CLK2, SI5351_DRIVE_2MA);
-  si5351.output_enable(SI5351_CLK0, 0);
+  Serial.println("*Fixed PLL");
+  
+  si5351.output_enable(SI5351_CLK0, 1);
   si5351.output_enable(SI5351_CLK1, 0);
   si5351.output_enable(SI5351_CLK2, 1);
-  Serial.println("*Output enabled PLL\n");
-  si5351.set_freq(500000000l,  SI5351_CLK2);   
-  
-  Serial.println("*Si5350 ON\n");       
-  mode = MODE_NORMAL;
+  Serial.println("*Output enabled PLL");
+
+  si5351.drive_strength(SI5351_CLK2, SI5351_DRIVE_2MA);
+  si5351.set_freq(500000000l,  SI5351_CLK2); // CLK2 used for VFO frequency
+  si5351.drive_strength(SI5351_CLK0, SI5351_DRIVE_2MA);
+  si5351.set_freq(bfoFreq * 100ULL, SI5351_CLK0); // CLK0 used for BFO frequency
+  Serial.println("*Si5354 ON\n");
   delay(10);
+
+  frequency = START_FREQ;
+  attachInterrupt(0, updateEncoder, CHANGE);
+  attachInterrupt(1, updateEncoder, CHANGE);
+  Serial.println("*Initialized rotary encoder\n");
 }
 
-void loop(){
-
-
-   if (digitalRead(CAL_BUTTON) == LOW && mode == MODE_NORMAL){
-    mode = MODE_CALIBRATE;    
-    si5351.set_correction(0);
-    printLine2("Calibration... ");
-    delay(5000);
-    return;
-  }
-  else if (mode == MODE_CALIBRATE){
-    calibrate();
-    delay(50);
-    return;
-  }
-/*
-  checkCW();
-  checkTX();
-  checkButton(); */
-  doTuning(); 
-  delay(50); 
+void loop() {
+  if (updateNeeded)
+    updateFrequency();
+    
+  checkPress();
 }
 
